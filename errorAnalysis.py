@@ -1,11 +1,6 @@
 from google.cloud import bigquery
 from collections import defaultdict
-from datetime import datetime
-import base64
-import json
 import csv
-import pymongo
-from pymongo import MongoClient
 import os
 
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/Users/khondkg/Documents/keys/umg-dev-key.json'
@@ -66,11 +61,12 @@ def get_track_value(track_data, key):
 playlistsDictionary = {}
 playlistDistinctTracksDictionary = {}
 result_array = []
+tracks_array = []
 
 client = bigquery.Client(project='umg-dev')
 
-# Load All Playlists From BigQuery
-playlists = list(client.query("SELECT playlist_uri FROM `umg-dev.pitching.spotify_playlists_info_4K` WHERE playlist_uri IN ( SELECT string_field_0 FROM  `umg-dev.pitching.test_set` WHERE LENGTH(string_field_0) > 0)").result(timeout=6000))
+# Load Playlists From BigQuery
+playlists = list(client.query("SELECT playlist_uri FROM `umg-dev.pitching.spotify_playlists_info_4K` WHERE LENGTH(playlist_uri) > 0 LIMIT 10").result(timeout=6000))
 
 # Fill Playlists to Dictionary
 for playlist in playlists:
@@ -118,8 +114,10 @@ for track in playlistDistinctTracks:
                                              valence_name:valence, mode_name: mode, release_year_name: release_year,
                                              track_artist_name: track_artist, genre_name: genre, track_country_name: track_country}
 
+playlist_tracks_query =  "SELECT playlist_id, isrc FROM `umg-dev.pitching.spotify_playlists_4K_tracks_info` WHERE LENGTH(isrc) > 0 AND playlist_id IN ({0})".format(",".join("'{0}'".format(w) for w in playlistsDictionary.keys()))
+
 # Load All Playlist Tracks
-playlistTracks = list(client.query("SELECT playlist_id, isrc FROM `umg-dev.pitching.spotify_playlists_4K_tracks_info` WHERE LENGTH(isrc) > 0").result(timeout=6000))
+playlistTracks = list(client.query(playlist_tracks_query).result(timeout=6000))
 
 # Append For Each Playlist Their Tracks
 for playlistTrack in playlistTracks:
@@ -133,6 +131,16 @@ for playlistTrack in playlistTracks:
     playlistData[1].append(isrc)
     playlistsDictionary[playlistId] = playlistData
 
+for key, value in playlistsDictionary.iteritems():
+    playlistTracks = value[1]
+    idx = 0
+    for isrc in playlistTracks:
+        idx = idx + 1
+        if idx <= 3:
+            tracks_array.append((isrc, key))
+            playlistTracks.remove(isrc)
+        else:
+            break
 
 for playlistKey in playlistsDictionary:
     playlistTracks = playlistsDictionary[playlistKey][1]
@@ -242,44 +250,13 @@ for playlistKey in playlistsDictionary:
     playlistsDictionary[playlistKey] =(playlistsDictionary[playlistKey][0],
                                        playlistTracks, playlistMedian, playlistWeights, playlist_max_error)
 
-#load All Tracks for playlist pitching
-pitchingTracks = list(client.query("SELECT * FROM `umg-dev.pitching.pitching_tracks_echonest_data_full` LIMIT 1000").result(timeout=6000))
+right_pitching_count = 0
 
+for pitching_track in tracks_array:
+    isrc = pitching_track[0]
+    playlist_id = pitching_track[1]
+    pitching_track_dictionary = playlistDistinctTracksDictionary[isrc]
 
-for pitching_track in pitchingTracks:
-    isrc = pitching_track[0].encode('utf-8')
-    uri = pitching_track[1].encode('utf-8')
-    energy = pitching_track[2]
-    liveness = pitching_track[3]
-    tempo_raw = pitching_track[4]
-    tempo = None
-    if tempo_raw:
-        tempo = (tempo_raw - 0.0) / ((248.113 - 0.0) * 1.0)
-    speechiness = pitching_track[5]
-    acousticness = pitching_track[6]
-    instrumentalness = pitching_track[7]
-    danceability = pitching_track[8]
-    key = pitching_track[9].encode('utf-8') if pitching_track[9] else None
-    duration_ms = pitching_track[10].encode('utf-8') if pitching_track[10] else None
-    loudnessRaw = pitching_track[11]
-    loudness = (loudnessRaw + 60) / (60 * 1.0)
-    valence = pitching_track[12]
-    mode = pitching_track[13].encode('utf-8') if pitching_track[13] else None
-    track_artist = pitching_track[14].encode('utf-8') if pitching_track[14] else None
-    release_date_raw = pitching_track[15].encode('utf-8') if pitching_track[15] else None
-    release_year = None
-    if release_date_raw:
-        release_year = release_date_raw.split(' ')[0]
-
-    genre = pitching_track[17].encode('utf-8') if pitching_track[17] else None
-    track_country = isrc[0:2]
-
-    pitching_track_dictionary = {uri_name : uri, energy_name: energy, liveness_name: liveness,
-                                             tempo_name: tempo, speechiness_name: speechiness, acousticness_name: acousticness,
-                                             instrumentalness_name: instrumentalness, danceability_name: danceability,
-                                             key_name:key, duration_ms_name: duration_ms, loudness_name: loudness,
-                                             valence_name:valence, mode_name: mode, release_year_name: release_year,
-                                             track_artist_name: track_artist, genre_name: genre, track_country_name: track_country}
 
     for playlist_to_pitch_key, playlist_to_pitch_value  in playlistsDictionary.iteritems():
         playlist_uri = playlist_to_pitch_value[0]
@@ -296,22 +273,14 @@ for pitching_track in pitchingTracks:
 
         track_error = calc_sum / (weight_sum * 1.0)
 
-        track_error_percentage = 0.0
-
         if track_error <= playlist_max_error:
-            if playlist_max_error != 0:
-                track_error_percentage = (100 - (100 * (track_error / playlist_max_error)))
+            if playlist_to_pitch_key == playlist_id:
+                right_pitching_count = right_pitching_count + 1
 
-                if track_error_percentage >= 30:
-                    result_array.append((isrc, playlist_uri, track_error_percentage))
+error_percentage = (100 - (100 * (right_pitching_count / len(tracks_array) * 1.0)))
 
-# Save Result to the File
-f = open('result.csv', 'w+')
-csv_file = csv.writer(f)
-for pitching_info in result_array:
-    csv_file.writerow((pitching_info[0], pitching_info[1], pitching_info[2]))
+print 'Error is for {0}%'.format(error_percentage)
 
-f.close()
 
 
 
