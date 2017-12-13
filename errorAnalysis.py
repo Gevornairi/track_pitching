@@ -66,7 +66,7 @@ tracks_array = []
 client = bigquery.Client(project='umg-dev')
 
 # Load Playlists From BigQuery
-playlists = list(client.query("SELECT playlist_uri FROM `umg-dev.pitching.spotify_playlists_info_4K` WHERE LENGTH(playlist_uri) > 0 LIMIT 10").result(timeout=6000))
+playlists = list(client.query("SELECT playlist_uri FROM `umg-dev.pitching.spotify_playlists_info_4K` WHERE LENGTH(playlist_uri) > 0 LIMIT 100").result(timeout=6000))
 
 # Fill Playlists to Dictionary
 for playlist in playlists:
@@ -277,9 +277,9 @@ for pitching_track in tracks_array:
             if playlist_to_pitch_key == playlist_id:
                 right_pitching_count = right_pitching_count + 1
 
-error_percentage = (100 - (100 * (right_pitching_count / len(tracks_array) * 1.0)))
+error_percentage = 100 * (right_pitching_count / (len(tracks_array) * 1.0))
 
-print 'Error is for {0}%'.format(error_percentage)
+print 'Error is for {0}%, total items were {1} right count was {2}'.format(error_percentage, len(tracks_array), right_pitching_count)
 
 
 
